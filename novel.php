@@ -295,6 +295,15 @@ pageHeader('小说管理 - ' . $novel['title'], 'home');
                 <?= $outlined === 0 ? 'disabled title="请先生成大纲"' : '' ?>>
           <i class="bi bi-skip-forward me-1"></i>写下一章
         </button>
+        <!-- 挂机写作 -->
+        <button class="btn btn-sm <?= !empty($novel['daemon_write']) ? 'btn-success' : 'btn-outline-success' ?>"
+                id="btn-daemon-write"
+                data-novel="<?= $id ?>"
+                data-enabled="<?= !empty($novel['daemon_write']) ? '1' : '0' ?>"
+                <?= $outlined === 0 ? 'disabled title="请先生成大纲"' : '' ?>
+                onclick="DaemonWrite.toggle()">
+          <i class="bi bi-robot me-1"></i><?= !empty($novel['daemon_write']) ? '挂机中' : '挂机写作' ?>
+        </button>
         <!-- 取消写作 -->
         <button class="btn btn-sm btn-outline-warning" id="btn-cancel-write"
                 data-novel="<?= $id ?>"

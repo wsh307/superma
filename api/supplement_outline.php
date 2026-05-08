@@ -115,32 +115,57 @@ $engine = new MemoryEngine($novelId);
 $targetChapters = (int)$novel['target_chapters'];
 
 // ---- 检测缺失章节 ----
-$existingRows = DB::fetchAll(
-    'SELECT chapter_number, status FROM chapters 
-     WHERE novel_id=? AND chapter_number>=1 AND chapter_number<=?
+// 检测两种缺失：
+// 1. 缺失章节大纲（chapters.status = 'pending' 或章节记录不存在）
+// 2. 缺失章节概要（chapter_synopses 不存在或 synopsis 为空）
+
+// 1. 获取已有章节大纲的章节号
+$outlinedRows = DB::fetchAll(
+    'SELECT chapter_number FROM chapters
+     WHERE novel_id=? AND chapter_number>=1 AND chapter_number<=? AND status != "pending"
      ORDER BY chapter_number ASC',
     [$novelId, $targetChapters]
 );
-
-// 构建已有大纲的章节号集合（status 不是 pending）
 $outlinedSet = [];
-foreach ($existingRows as $row) {
-    if ($row['status'] !== 'pending') {
-        $outlinedSet[(int)$row['chapter_number']] = true;
-    }
+foreach ($outlinedRows as $row) {
+    $outlinedSet[(int)$row['chapter_number']] = true;
 }
 
-// 找出所有缺失的章节号
-$missingChapters = [];
+// 2. 获取已有章节概要的章节号
+$hasSynopsisRows = DB::fetchAll(
+    'SELECT chapter_number FROM chapter_synopses
+     WHERE novel_id=? AND synopsis IS NOT NULL AND synopsis != ""
+     ORDER BY chapter_number ASC',
+    [$novelId]
+);
+$hasSynopsisSet = [];
+foreach ($hasSynopsisRows as $row) {
+    $hasSynopsisSet[(int)$row['chapter_number']] = true;
+}
+
+// 3. 找出缺失的章节号
+// - 缺失大纲：status = 'pending' 或记录不存在
+// - 缺失概要：有大纲但无概要
+$missingOutline = [];  // 缺失大纲的章节
+$missingSynopsis = []; // 缺失概要的章节
+
 for ($i = 1; $i <= $targetChapters; $i++) {
     if (!isset($outlinedSet[$i])) {
-        $missingChapters[] = $i;
+        // 无大纲
+        $missingOutline[] = $i;
+    } elseif (!isset($hasSynopsisSet[$i])) {
+        // 有大纲但无概要
+        $missingSynopsis[] = $i;
     }
 }
+
+// 优先补写缺失的大纲（大纲是概要的前提）
+$missingChapters = !empty($missingOutline) ? $missingOutline : $missingSynopsis;
+$isSupplementingSynopsis = empty($missingOutline) && !empty($missingSynopsis);
 
 if (empty($missingChapters)) {
     sse('complete', [
-        'msg'         => '所有章节大纲已完整，无需补写。',
+        'msg'         => '所有章节大纲和细纲已完整，无需补写。',
         'supplemented' => 0,
         'total_missing' => 0,
     ]);
@@ -165,11 +190,15 @@ for ($i = 1; $i < count($missingChapters); $i++) {
 $segments[] = ['start' => $segStart, 'end' => $segEnd];
 
 $totalMissing = count($missingChapters);
+$scanMsg = $isSupplementingSynopsis
+    ? "检测到 {$totalMissing} 个章节缺失细纲（概要），将分 " . count($segments) . " 段补写。"
+    : "检测到 {$totalMissing} 个章节缺失大纲，将分 " . count($segments) . " 段补写。";
 sse('scan_result', [
-    'msg'           => "检测到 {$totalMissing} 个章节缺失大纲，将分 " . count($segments) . " 段补写。",
+    'msg'           => $scanMsg,
     'missing_count'  => $totalMissing,
     'segment_count'  => count($segments),
     'missing_list'   => $missingChapters,
+    'type'           => $isSupplementingSynopsis ? 'synopsis' : 'outline',
 ]);
 
 // ---- 全局 token 累计 ----
@@ -228,17 +257,130 @@ if ($is1MModel) {
 foreach ($segments as $segIdx => $seg) {
     $segStart = $seg['start'];
     $segEnd   = $seg['end'];
-    
+
     // 如果段太长，拆成小批次
     $current = $segStart;
     while ($current <= $segEnd) {
         $batchEnd = min($current + $batchSize - 1, $segEnd);
-        
+
+        $typeLabel = $isSupplementingSynopsis ? '细纲' : '大纲';
         sse('progress', [
-            'msg'   => "正在补写第 {$current}～{$batchEnd} 章大纲...",
+            'msg'   => "正在补写第 {$current}～{$batchEnd} 章{$typeLabel}...",
             'start' => $current,
             'end'   => $batchEnd,
         ]);
+
+        if ($isSupplementingSynopsis) {
+            // ---- 补写细纲（概要） ----
+            // 获取该批次的章节信息
+            $chaptersToProcess = DB::fetchAll(
+                'SELECT * FROM chapters
+                 WHERE novel_id=? AND chapter_number>=? AND chapter_number<=? AND status IN ("outlined","writing","completed")
+                 ORDER BY chapter_number ASC',
+                [$novelId, $current, $batchEnd]
+            );
+
+            if (empty($chaptersToProcess)) {
+                sse('error', ['msg' => "第{$current}～{$batchEnd}章无有效章节记录，跳过"]);
+                $current = $batchEnd + 1;
+                continue;
+            }
+
+            $batchSaved = 0;
+            foreach ($chaptersToProcess as $ch) {
+                $chNum = (int)$ch['chapter_number'];
+
+                // 检查是否已有概要
+                $existingSynopsis = DB::fetch(
+                    'SELECT id FROM chapter_synopses WHERE novel_id=? AND chapter_number=?',
+                    [$novelId, $chNum]
+                );
+                if ($existingSynopsis) {
+                    sse('progress', ['msg' => "第{$chNum}章已有细纲，跳过"]);
+                    continue;
+                }
+
+                $messages = buildChapterSynopsisPrompt($novel, $ch, $storyOutline ?: []);
+                $rawResponse = '';
+                $usage = ['prompt_tokens' => 0, 'completion_tokens' => 0];
+
+                try {
+                    withModelFallback(
+                        $novel['model_id'] ?: null,
+                        function (AIClient $ai) use ($messages, &$rawResponse, &$usage) {
+                            $rawResponse = '';
+                            $usage = $ai->chatStream($messages, function (string $token) use (&$rawResponse) {
+                                if ($token === '[DONE]') return;
+                                $rawResponse .= $token;
+                                echo "event: chunk\n";
+                                echo 'data: ' . json_encode(['t' => $token], JSON_UNESCAPED_UNICODE) . "\n\n";
+                                if (ob_get_level()) ob_flush();
+                                flush();
+                            });
+                        },
+                        function (AIClient $nextAi, string $errMsg) use ($chNum) {
+                            sse('model_switch', [
+                                'msg'        => "模型请求失败，自动切换到「{$nextAi->modelLabel}」重试",
+                                'next_model' => $nextAi->modelLabel,
+                                'error'      => $errMsg,
+                            ]);
+                        }
+                    );
+                } catch (RuntimeException $e) {
+                    sse('error', ['msg' => "第{$chNum}章细纲生成失败 — " . $e->getMessage()]);
+                    continue;
+                }
+
+                $totalPrompt     += $usage['prompt_tokens'];
+                $totalCompletion += $usage['completion_tokens'];
+
+                $synopsis = extractChapterSynopsis($rawResponse);
+
+                if (empty($synopsis)) {
+                    sse('error', ['msg' => "第{$chNum}章细纲解析失败，跳过"]);
+                    continue;
+                }
+
+                // 保存到 chapter_synopses 表
+                $synopsisId = DB::insert('chapter_synopses', [
+                    'novel_id'         => $novelId,
+                    'chapter_number'   => $chNum,
+                    'synopsis'         => $synopsis['synopsis'] ?? '',
+                    'scene_breakdown'  => json_encode($synopsis['scene_breakdown'] ?? [], JSON_UNESCAPED_UNICODE),
+                    'dialogue_beats'   => json_encode($synopsis['dialogue_beats'] ?? [], JSON_UNESCAPED_UNICODE),
+                    'sensory_details'  => json_encode($synopsis['sensory_details'] ?? [], JSON_UNESCAPED_UNICODE),
+                    'pacing'           => $synopsis['pacing'] ?? '中',
+                    'cliffhanger'      => $synopsis['cliffhanger'] ?? '',
+                    'foreshadowing'    => json_encode($synopsis['foreshadowing'] ?? [], JSON_UNESCAPED_UNICODE),
+                    'callbacks'        => json_encode($synopsis['callbacks'] ?? [], JSON_UNESCAPED_UNICODE),
+                ]);
+
+                // 更新章节关联
+                if ($synopsisId && $ch['id']) {
+                    DB::update('chapters', ['synopsis_id' => $synopsisId], 'id=?', [$ch['id']]);
+                }
+
+                $batchSaved++;
+                $totalSupplemented++;
+
+                sse('progress', ['msg' => "第{$chNum}章细纲已保存"]);
+            }
+
+            addLog($novelId, 'supplement', "补写第{$current}-{$batchEnd}章细纲，共{$batchSaved}章");
+
+            sse('batch_done', [
+                'msg'              => "第 {$current}～{$batchEnd} 章细纲补写完成（{$batchSaved} 章）",
+                'start'            => $current,
+                'end'              => $batchEnd,
+                'saved'            => $batchSaved,
+                'cum_supplemented' => $totalSupplemented,
+            ]);
+
+            $current = $batchEnd + 1;
+            continue;
+        }
+
+        // ---- 以下为补写大纲的原有逻辑 ----
 
         // 获取前几章大纲作为上下文（保持连贯性，含 hook/pacing/suspense）
         $recentOutlines = DB::fetchAll(
@@ -509,12 +651,14 @@ foreach ($segments as $segIdx => $seg) {
 
 DB::update('novels', ['status' => 'draft'], 'id=?', [$novelId]);
 
+$finalTypeLabel = $isSupplementingSynopsis ? '细纲' : '大纲';
 sse('complete', [
-    'msg'               => "大纲补写完成！共补写 {$totalSupplemented} 章（原缺失 {$totalMissing} 章）。",
+    'msg'               => "{$finalTypeLabel}补写完成！共补写 {$totalSupplemented} 章（原缺失 {$totalMissing} 章）。",
     'supplemented'      => $totalSupplemented,
     'total_missing'     => $totalMissing,
     'prompt_tokens'     => $totalPrompt,
     'completion_tokens' => $totalCompletion,
     'total_tokens'      => $totalPrompt + $totalCompletion,
+    'type'              => $isSupplementingSynopsis ? 'synopsis' : 'outline',
 ]);
 sseDone();

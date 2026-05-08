@@ -255,23 +255,35 @@ final class MemoryEngine
         // v1.11.8: 记录回收详情
         $report['resolved_details'] = $resolvedList;
 
-        // 6) 故事势能 → novel_state
+        // 6) 故事势能 + 场景位置 → novel_state
+        // v1.12: 新增场景位置追踪，解决"主角在村里突然看到市区街边"的场景跳跃问题
         $momentum = trim((string)($summary['story_momentum'] ?? ''));
+        $currentLocation = trim((string)($summary['current_location'] ?? ''));
+        $locationTransition = trim((string)($summary['location_transition'] ?? ''));
+
+        $stateUpdates = ['last_ingested_chapter' => $chapterNumber];
+
         if ($momentum !== '') {
-            try {
-                $this->upsertNovelState([
-                    'story_momentum'        => $momentum,
-                    'last_ingested_chapter' => $chapterNumber,
-                ]);
-                $report['momentum_updated'] = true;
-            } catch (\Throwable $e) {
-                $report['errors'][] = 'momentum: ' . $e->getMessage();
+            $stateUpdates['story_momentum'] = $momentum;
+        }
+
+        // 位置更新：有新位置时才更新，否则保留旧位置（主角可能多章在同一地点）
+        if ($currentLocation !== '') {
+            $stateUpdates['current_location'] = $currentLocation;
+            $stateUpdates['location_chapter'] = $chapterNumber;
+            if ($locationTransition !== '') {
+                $stateUpdates['location_transition'] = $locationTransition;
             }
-        } else {
-            // 即使没 momentum,也更新 last_ingested_chapter
-            try {
-                $this->upsertNovelState(['last_ingested_chapter' => $chapterNumber]);
-            } catch (\Throwable $e) { /* ignore */ }
+            $report['location_updated'] = $currentLocation;
+        }
+
+        try {
+            $this->upsertNovelState($stateUpdates);
+            if ($momentum !== '') {
+                $report['momentum_updated'] = true;
+            }
+        } catch (\Throwable $e) {
+            $report['errors'][] = 'novel_state: ' . $e->getMessage();
         }
 
         // 7) 爽点类型标记 → memory_atoms(cool_point)
@@ -519,6 +531,9 @@ final class MemoryEngine
             'key_events'            => [],
             'pending_foreshadowing' => [],
             'story_momentum'        => $b['novelState']['story_momentum'] ?? '',
+            'current_location'      => $b['novelState']['current_location'] ?? '',
+            'location_chapter'      => $b['novelState']['location_chapter'] ?? null,
+            'location_transition'   => $b['novelState']['location_transition'] ?? '',
             'current_arc_summary'   => $b['novelState']['current_arc_summary'] ?? '',
             'arc_summaries'         => [],
             'semantic_hits'         => [],

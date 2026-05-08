@@ -201,6 +201,10 @@ EOT;
         $protagonistRule = $protagonistName
             ? "\n9. 主角名锚定：本小说主角固定为「{$protagonistName}」，绝对不可更改、替换、省略或使用其他称呼作为主角，所有涉及主角的内容必须使用此名字"
             : '';
+
+        // v1.12: 场景连续性约束
+        $locationRule = $this->buildLocationRule();
+
         return <<<EOT
 【写作铁律，必须遵守优先级最高】
 1. 字数目标（最高优先级）：正文目标 {$targetWords} 字（±{$tol['tolerance']}字弹性区间），严格控制在 {$minWords} ~ {$maxWords} 字之间。
@@ -217,9 +221,43 @@ EOT;
 4. 人物一致性：所有人物的职务、身份、生死状态必须与【人物当前状态】完全一致，不得擅自改变
 5. 情节不重复：【全书已发生事件】中出现的任何事件，严禁以任何形式重演或变体重复
 6. 逻辑自洽：本章发生的事件必须是前情的自然延伸，因果链条清晰，不得出现无因之果
-7. 直接开始：从"第{$this->chNum}章 {$this->chapter['title']}"这一行直接开始输出正文，不要有任何前言、后记、解释或"好的，我来写"等废话
-8. 风格统一：保持与前文一致的叙事视角、语气和文风，不得中途切换人称{$protagonistRule}
+7. 场景连续性：本章开场的场景位置必须承接上章结尾，场景切换必须有明确的转场描写，禁止无过渡的场景跳跃
+8. 直接开始：从"第{$this->chNum}章 {$this->chapter['title']}"这一行直接开始输出正文，不要有任何前言、后记、解释或"好的，我来写"等废话
+9. 风格统一：保持与前文一致的叙事视角、语气和文风，不得中途切换人称{$protagonistRule}{$locationRule}
 EOT;
+    }
+
+    /**
+     * v1.12: 构建场景连续性规则
+     * 解决"主角在村里突然看到市区街边"的场景跳跃问题
+     */
+    private function buildLocationRule(): string
+    {
+        $currentLocation = $this->memoryCtx['current_location'] ?? '';
+        $locationTransition = $this->memoryCtx['location_transition'] ?? '';
+        $locationChapter = $this->memoryCtx['location_chapter'] ?? null;
+
+        if ($currentLocation === '') {
+            return '';
+        }
+
+        $lines = [];
+        $lines[] = "\n\n【📍 场景连续性约束】";
+        $lines[] = "主角当前位置：{$currentLocation}";
+        $lines[] = "位置来源：第{$locationChapter}章";
+
+        if ($locationTransition !== '') {
+            $lines[] = "到达方式：{$locationTransition}";
+        }
+
+        $lines[] = "";
+        $lines[] = "⚠️ 场景切换规则：";
+        $lines[] = "  1. 本章开场必须从「{$currentLocation}」开始（或明确延续该场景）";
+        $lines[] = "  2. 如需切换场景，必须写出转场过程（行走、传送、飞行等）";
+        $lines[] = "  3. 禁止场景跳跃：上一段在A地，下一段突然在B地";
+        $lines[] = "  4. 转场模板：动作触发 → 离开当前地点 → 路途描写 → 到达新地点";
+
+        return implode("\n", $lines);
     }
 
     public function goldenThreeLines(): string

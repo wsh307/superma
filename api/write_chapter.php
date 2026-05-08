@@ -289,7 +289,7 @@ $GLOBALS['sendWaiting'] = function(int $elapsedSeconds) {
     flush();
 };
 
-// 字数截断机制已移除——AI 可自然写完，不再强制截断
+// 字数截断：streamWrite() 内已恢复自动截断，AI 超字时自动修剪至容差上限
 
 // ============================================================
 // Phase 1–3: WriteEngine 解析章节 / 记忆初始化 / 组装 Prompt

@@ -111,7 +111,7 @@ function generateChapterSummary(array $novel, array $chapter, string $content): 
     }
 
     $messages = [
-        ['role' => 'system', 'content' => '你是一位小说编辑助手，负责分析刚写完的章节并输出摘要。'],
+        ['role' => 'system', 'content' => '你是一位小说编辑助手，负责分析刚写完的章节并输出摘要。你必须严格按照指定格式输出。'],
         ['role' => 'user',   'content' => <<<EOT
 小说《{$novel['title']}》第{$chNum}章《{$chapter['title']}》
 {$protagonistConstraint}
@@ -120,52 +120,68 @@ function generateChapterSummary(array $novel, array $chapter, string $content): 
 章节正文（可能节选）：
 {$truncated}
 {$pendingForeshadowings}
-请分两部分输出：
 
-第一部分：用一段200-300字的自然段落总结本章内容，包含情节要点、人物行动与变化、未解伏笔、章末氛围。直接写摘要正文，不要加标题或前缀。
+【重要：必须按以下格式输出，不要省略任何部分】
 
-第二部分：在摘要之后，另起一行写 ---（三个减号分隔符），再另起一行输出以下JSON（用于系统数据记录）：
+第一部分：摘要段落
+用一段200-300字的自然段落总结本章内容，包含情节要点、人物行动与变化、未解伏笔、章末氛围。
+
+第二部分：分隔符
+另起一行，输出三个减号：---
+
+第三部分：JSON数据
+另起一行，输出以下JSON格式（用```json和```包裹）：
+
+```json
 {{
-  "character_updates": {{"人物名": {{
-    "title": "职务/称号",
-    "status": "处境",
-    "关键变化": "本章重要变化",
-    "境界": "当前修炼境界（如筑基初期、金丹中期等，修真/玄幻类必填）",
-    "等级": "当前等级（如LV.30、三阶魔法师等，非修真体系用此项）",
-    "战力": "战力描述（如金丹级、S级等）",
-    "技能": ["本章新获得/升级的技能"],
-    "装备": ["本章新获得的装备"],
-    "血脉": "血脉/体质名称及变化",
-    "法宝": ["本章新获得的法宝"],
-    "感悟": "对修炼/人生的感悟"
-  }}}},
+  "character_updates": {{"人物名": {{"title": "职务", "status": "处境", "关键变化": "变化描述"}}}}},
+  "character_traits": [{{"name": "角色名", "trait": "特征描述", "evidence": "体现该特征的情节"}}],
   "key_event": "本章最重要的事，20字以内",
+  "current_location": "主角在本章结束时的位置（具体地点名，如：青云宗内门广场）",
+  "location_transition": "如本章有地点移动，简述移动方式（如：传送阵、飞行三日），无移动则留空",
   "used_tropes": ["意象1", "意象2"],
-  "new_foreshadowing": [{{"desc": "新埋伏笔", "suggested_payoff_chapter": 章节号}}],
-  "resolved_foreshadowing": ["已回收伏笔描述"],
+  "new_foreshadowing": [{{"desc": "新埋伏笔描述", "suggested_payoff_chapter": 建议回收章节号}}],
+  "resolved_foreshadowing": ["已回收伏笔的原始描述"],
   "story_momentum": "当前故事悬念/冲突状态，30字以内",
-  "cool_point_type": "爽点类型九选一：underdog_win/face_slap/treasure_find/breakthrough/power_expand/romance_win/truth_reveal/last_stand/sacrifice，无则留空",
-  "character_emotions": [{{"name": "角色名", "state": "情绪状态", "intensity": 80, "cause": "导致此情绪的原因", "expected_decay": 3}}]
+  "cool_point_type": "爽点类型（从以下选一个：underdog_win/face_slap/treasure_find/breakthrough/power_expand/romance_win/truth_reveal/last_stand/sacrifice）",
+  "character_emotions": [{{"name": "角色名", "state": "情绪（happy/angry/sad/tense/neutral/fearful/determined/melancholy/excited/confused/hopeful/desperate/calm/anxious/proud）", "intensity": 80, "cause": "原因", "expected_decay": 3}}]
 }}
+```
 
-used_tropes 最多8个。new_foreshadowing 和 resolved_foreshadowing 若无则输出空数组[]。
-character_emotions 只记录本章有明显情绪表现的核心角色（主角+重要配角），情绪状态从以下选择：
-happy/angry/sad/tense/neutral/fearful/determined/melancholy/excited/confused/hopeful/desperate/calm/anxious/proud
-intensity 为0-100的整数，expected_decay 为预期持续章节数（默认3）。
-cool_point_type 判断规则：
-- underdog_win = 主角以弱胜强
-- face_slap = 打脸反转
-- treasure_find = 获得宝物/奇遇
-- breakthrough = 修为突破/晋级
-- power_expand = 势力扩张/收服手下
-- romance_win = 红颜倾心/情感突破
+【字段说明】：
+- character_updates：仅记录本章有变化的角色，无变化则写空对象 {{}}
+- character_traits：提取角色性格特征（如沉稳、果断、狡诈），最多3条
+- key_event：最重要的单一事件
+- current_location：主角在本章结束时所在的场景位置，必须是具体地点名（如"落霞村村口广场"而非"村里"）
+- location_transition：如果有地点变化，简述如何到达（如"从青石镇步行半日"），便于下章转场
+- used_tropes：本章使用的意象/套路，最多5个
+- new_foreshadowing：新埋设的伏笔，无则写空数组 []
+- resolved_foreshadowing：已回收的伏笔（必须是上面伏笔列表中的原始描述），无则写空数组 []
+- cool_point_type：爽点类型，必须从给定的9种中选择一个或留空
+- character_emotions：记录主角和重要配角的情绪变化，无则写空数组 []
 
-【人物状态提取规则】：
-1. 仅本章有明显变化的角色才写入 character_updates，没有变化的角色不要写
-2. 境界/等级如果没有变化则不要输出，反之如果本章有突破必须写清楚前后变化
-3. 境界填修真/玄幻体系（如炼气→筑基→金丹→元婴→化神），等级填通用体系（如LV体系、阶级体系），二者选其一即可
-4. 技能/装备/法宝若无新增则输出空数组[]，不要编造
-5. 血脉/感悟若无变化则不要输出此项
+【输出示例】：
+沈清漪率军追击敌军，途中遭遇埋伏。她利用地形优势，引爆灵晶制造混乱，成功活捉敌方将领。战斗中她修为有所突破，达到Lv.4。战斗结束后，她带领部队返回落霞村休整。
+
+---
+
+```json
+{{
+  "character_updates": {{"沈清漪": {{"境界": "Lv.4", "关键变化": "修为突破，战力提升"}}}},
+  "character_traits": [{{"name": "沈清漪", "trait": "果断", "evidence": "面对埋伏立即决定引爆灵晶"}}],
+  "key_event": "沈清漪活捉敌方将领",
+  "current_location": "落霞村村口广场",
+  "location_transition": "战斗结束后，率军徒步半日返回",
+  "used_tropes": ["伏击", "突破"],
+  "new_foreshadowing": [],
+  "resolved_foreshadowing": [],
+  "story_momentum": "敌方将领被擒，战局扭转",
+  "cool_point_type": "underdog_win",
+  "character_emotions": [{{"name": "沈清漪", "state": "determined", "intensity": 85, "cause": "战斗胜利", "expected_decay": 2}}]
+}}
+```
+
+现在请分析上面的章节并按此格式输出：
 EOT
         ],
     ];
@@ -177,6 +193,8 @@ EOT
         $narrativeSummary = '';
         $result = [];
 
+        // v1.11.8: 增强的 JSON 提取逻辑
+        // 策略1: 查找 --- 分隔符
         if (str_contains($raw, '---')) {
             [$summaryPart, $jsonPart] = explode('---', $raw, 2);
             $narrativeSummary = trim($summaryPart);
@@ -185,17 +203,54 @@ EOT
                 $jsonPart = trim($m[1]);
             }
             $result = json_decode($jsonPart, true) ?? [];
-        } else {
-            $fallback = $raw;
-            if (preg_match('/```(?:json)?\s*([\s\S]*?)```/i', $fallback, $m)) {
-                $fallback = trim($m[1]);
+        }
+        // 策略2: 查找 JSON 代码块
+        elseif (preg_match('/```(?:json)?\s*([\s\S]*?)```/i', $raw, $m)) {
+            $jsonStr = trim($m[1]);
+            $result = json_decode($jsonStr, true) ?? [];
+            if (is_array($result)) {
+                $narrativeSummary = (string)($result['narrative_summary'] ?? '');
+                // 尝试从 raw 中提取摘要文本（JSON 之前的部分）
+                if (empty($narrativeSummary)) {
+                    $beforeJson = substr($raw, 0, strpos($raw, '```'));
+                    if (!empty(trim($beforeJson))) {
+                        $narrativeSummary = trim($beforeJson);
+                    }
+                }
             }
-            $result = json_decode($fallback, true);
+        }
+        // 策略3: 尝试直接解析整个响应为 JSON
+        else {
+            $result = json_decode($raw, true);
             if (is_array($result)) {
                 $narrativeSummary = (string)($result['narrative_summary'] ?? '');
             } else {
-                $narrativeSummary = trim($raw);
-                $result = [];
+                // 策略4: 尝试查找 { 字符开始的位置
+                $jsonStart = strpos($raw, '{');
+                if ($jsonStart !== false) {
+                    $jsonStr = substr($raw, $jsonStart);
+                    // 找到最后一个 } 的位置
+                    $jsonEnd = strrpos($jsonStr, '}');
+                    if ($jsonEnd !== false) {
+                        $jsonStr = substr($jsonStr, 0, $jsonEnd + 1);
+                        $result = json_decode($jsonStr, true) ?? [];
+                        if (is_array($result)) {
+                            $narrativeSummary = trim(substr($raw, 0, $jsonStart));
+                        }
+                    }
+                }
+
+                // 如果还是没有解析出 JSON，使用纯文本摘要
+                if (!is_array($result) || empty($result)) {
+                    $narrativeSummary = $raw;
+                    $result = [];
+
+                    // v1.11.8: 尝试从纯文本中提取角色信息
+                    $extractedChars = extractCharactersFromText($raw, $protagonistName, (int)$novel['id']);
+                    if (!empty($extractedChars)) {
+                        $result['character_updates'] = $extractedChars;
+                    }
+                }
             }
         }
 
@@ -206,7 +261,10 @@ EOT
         return [
             'narrative_summary'      => $narrativeSummary,
             'character_updates'      => (array)($result['character_updates']      ?? []),
+            'character_traits'       => (array)($result['character_traits']       ?? []),
             'key_event'              => (string)($result['key_event']             ?? ''),
+            'current_location'       => (string)($result['current_location']      ?? ''),
+            'location_transition'    => (string)($result['location_transition']   ?? ''),
             'used_tropes'            => (array)($result['used_tropes']            ?? []),
             'new_foreshadowing'      => (array)($result['new_foreshadowing']      ?? []),
             'resolved_foreshadowing' => (array)($result['resolved_foreshadowing'] ?? []),
@@ -217,6 +275,60 @@ EOT
     } catch (Throwable $e) {
         return [];
     }
+}
+
+/**
+ * v1.11.8: 从纯文本摘要中提取角色状态变化
+ * 当 AI 未返回 JSON 格式时的降级方案
+ */
+function extractCharactersFromText(string $text, string $protagonistName = '', int $novelId = 0): array
+{
+    $updates = [];
+
+    // 从 character_cards 获取已知角色名
+    $knownChars = [];
+    if ($novelId > 0) {
+        try {
+            $cards = DB::fetchAll(
+                'SELECT name FROM character_cards WHERE novel_id=? LIMIT 20',
+                [$novelId]
+            );
+            $knownChars = array_column($cards, 'name');
+        } catch (\Throwable $e) {}
+    }
+
+    // 如果主角名存在且出现在文本中，记录其出场
+    if (!empty($protagonistName) && mb_strpos($text, $protagonistName) !== false) {
+        // 尝试提取状态变化关键词
+        $statusKeywords = ['突破', '升级', '晋级', '获得', '失去', '战胜', '击败', '受伤', '死亡', '恢复'];
+        $foundStatus = null;
+        foreach ($statusKeywords as $kw) {
+            if (mb_strpos($text, $kw) !== false) {
+                // 提取包含关键词的句子片段
+                $pos = mb_strpos($text, $kw);
+                $start = max(0, $pos - 20);
+                $end = min(mb_strlen($text), $pos + 30);
+                $foundStatus = mb_substr($text, $start, $end - $start);
+                break;
+            }
+        }
+
+        $updates[$protagonistName] = [
+            '关键变化' => $foundStatus ?: '本章出场',
+        ];
+    }
+
+    // 检查其他已知角色是否出场
+    foreach ($knownChars as $name) {
+        if ($name === $protagonistName) continue;
+        if (mb_strpos($text, $name) !== false) {
+            $updates[$name] = [
+                '关键变化' => '本章出场',
+            ];
+        }
+    }
+
+    return $updates;
 }
 
 /**

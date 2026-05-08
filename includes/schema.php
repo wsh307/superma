@@ -236,10 +236,13 @@ class Schema
             'novel_state' => "CREATE TABLE IF NOT EXISTS `novel_state` (
                 `novel_id`              INT UNSIGNED PRIMARY KEY,
                 `story_momentum`        VARCHAR(300) DEFAULT NULL COMMENT '当前故事势能/悬念一句话',
+                `current_location`      VARCHAR(200) DEFAULT NULL COMMENT '主角当前位置/场景',
+                `location_chapter`      INT UNSIGNED DEFAULT NULL COMMENT '位置所在章节号',
+                `location_transition`   VARCHAR(300) DEFAULT NULL COMMENT '到达当前位置的方式描写',
                 `current_arc_summary`   TEXT DEFAULT NULL COMMENT '最近一个活跃弧段的摘要',
                 `last_ingested_chapter` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '最近成功记忆化的章节号',
                 `updated_at`            TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='小说状态表'",
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='小说状态表（含场景位置追踪）'",
 
             'novel_scene_templates' => "CREATE TABLE IF NOT EXISTS `novel_scene_templates` (
                 `id`                    INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

@@ -482,7 +482,7 @@ final class ForeshadowingRepo
 
     /**
      * 扫描章节内容，自动更新伏笔的提及记录
-     * 匹配策略：伏笔描述的前20字符出现在正文中即视为提及
+     * v1.11.8: 改进匹配策略，提取关键词匹配而非完整描述
      */
     public function trackMentionsInContent(string $content, int $chapterNum): int
     {
@@ -495,9 +495,27 @@ final class ForeshadowingRepo
 
         $matched = 0;
         foreach ($pending as $item) {
-            $kw = mb_substr($item['description'], 0, 20);
-            if (mb_strlen($kw) < 4) continue;
-            if (mb_strpos($content, $kw) !== false) {
+            $desc = $item['description'];
+
+            // 策略1: 前15字符精确匹配
+            $kw1 = mb_substr($desc, 0, 15);
+            if (mb_strlen($kw1) >= 4 && mb_strpos($content, $kw1) !== false) {
+                $this->recordMention((int)$item['id'], $chapterNum);
+                $matched++;
+                continue;
+            }
+
+            // 策略2: 提取关键词（2字以上中文词组）匹配
+            preg_match_all('/[\x{4e00}-\x{9fa5}]{2,}/u', $desc, $m);
+            $keywords = array_unique($m[0] ?? []);
+            $hitCount = 0;
+            foreach (array_slice($keywords, 0, 5) as $kw) {
+                if (mb_strlen($kw) >= 3 && mb_strpos($content, $kw) !== false) {
+                    $hitCount++;
+                }
+            }
+            // 3个以上关键词命中视为提及
+            if ($hitCount >= 3) {
                 $this->recordMention((int)$item['id'], $chapterNum);
                 $matched++;
             }

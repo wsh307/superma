@@ -227,7 +227,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ---- 优化大纲逻辑按钮 ----
     const btnOptimizeOutline = document.getElementById('btn-optimize-outline');
     if (btnOptimizeOutline) {
-        btnOptimizeOutline.addEventListener('click', () => optimizeOutline());
+        btnOptimizeOutline.addEventListener('click', () => optimizeOutlineLogic());
     }
 
     // ---- 保存章节概要按钮 ----

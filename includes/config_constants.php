@@ -147,7 +147,7 @@ function getWritingDefaults(): array
         'ws_max_tokens_chapter'          => ['default' => 8192,    'type' => 'int'],
         // ── 质量检查参数 ──
         'ws_quality_check_enabled'       => ['default' => true,    'type' => 'bool'],
-        'ws_quality_min_score'           => ['default' => 6.0,     'type' => 'float'],
+        'ws_quality_min_score'           => ['default' => 6.0,     'type' => 'float'],  // 1-10分制，代码×10转百分制
 
         // ── 写作质量增强（v1.9 盲点修复）──
         'ws_rewrite_enabled'             => ['default' => true,    'type' => 'bool'],

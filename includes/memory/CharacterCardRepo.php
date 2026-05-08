@@ -237,6 +237,53 @@ final class CharacterCardRepo
     }
 
     /**
+     * v1.11.8: 更新角色出场章节（仅更新 last_updated_chapter，不记录 history）
+     * 用于追踪角色在章节中出场但无状态变化的情况
+     *
+     * @param string $name       角色名
+     * @param int    $chapterNum 章节号
+     * @return bool 是否成功更新
+     */
+    public function touchPresence(string $name, int $chapterNum): bool
+    {
+        $name = trim($name);
+        if ($name === '') return false;
+
+        $existing = DB::fetch(
+            'SELECT id, last_updated_chapter FROM character_cards WHERE novel_id=? AND name=?',
+            [$this->novelId, $name]
+        );
+
+        if (!$existing) return false;
+
+        // 只有当新章节大于当前记录的章节时才更新
+        $currentChapter = (int)$existing['last_updated_chapter'];
+        if ($chapterNum > $currentChapter) {
+            DB::update('character_cards', ['last_updated_chapter' => $chapterNum], 'id=?', [(int)$existing['id']]);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * v1.11.8: 批量更新角色出场章节
+     *
+     * @param array $names      角色名数组
+     * @param int   $chapterNum 章节号
+     * @return int 成功更新数量
+     */
+    public function touchPresenceBatch(array $names, int $chapterNum): int
+    {
+        $count = 0;
+        foreach ($names as $name) {
+            if ($this->touchPresence($name, $chapterNum)) {
+                $count++;
+            }
+        }
+        return $count;
+    }
+
+    /**
      * 获取某人物的变更历史
      */
     public function getHistory(string $name, int $limit = 50): array

@@ -123,6 +123,8 @@ async function optimizeOutlineLogicAjax() {
     let totalSkipped = 0;
     let batchIndex = 0;
     let hasMore = true;
+    let totalChapters = 0;  // v1.12: 记录总章节数，防止无限循环
+    const MAX_BATCHES = 1000;  // v1.12: 安全上限，防止极端情况无限循环
 
     optimizeOutlineAjaxRunning = true;
 
@@ -136,7 +138,9 @@ async function optimizeOutlineLogicAjax() {
         }
 
         // 循环处理每一批
-        while (hasMore && optimizeOutlineAjaxRunning) {
+        let batchCount = 0;  // v1.12: 批次计数器
+        while (hasMore && optimizeOutlineAjaxRunning && batchCount < MAX_BATCHES) {
+            batchCount++;
             progressLabel.textContent = `正在优化第 ${batchIndex * 10 + 1}～${(batchIndex + 1) * 10} 章大纲逻辑...`;
 
             const result = await processBatch(novelId, batchIndex, lastOptimized, progressLabel, batchLog, streamBox);
@@ -145,9 +149,14 @@ async function optimizeOutlineLogicAjax() {
                 // 批次失败（已自动重试耗尽），跳过继续下一批
                 totalSkipped++;
                 batchIndex++;
-                // 检查是否还有更多批次
-                // 需要查询 API 确认，暂时递增
                 streamBox.textContent = `已跳过 ${totalSkipped} 个批次，继续处理...`;
+
+                // v1.12: 安全检查 - 如果连续跳过太多批次，停止循环
+                if (totalSkipped > 50) {
+                    progressLabel.textContent = `连续跳过 ${totalSkipped} 个批次，已停止优化。请检查网络或稍后重试。`;
+                    showToast('优化过程中断，请稍后重试', 'error');
+                    break;
+                }
 
                 // 短暂延迟后继续
                 await new Promise(resolve => setTimeout(resolve, 2000));
@@ -156,6 +165,7 @@ async function optimizeOutlineLogicAjax() {
 
             // 批次成功
             const progress = result.progress;
+            totalChapters = progress.total;  // v1.12: 记录总章节数
             progressLabel.textContent = result.message;
             statsEl.textContent = `进度: ${progress.current}/${progress.total} 章 (${progress.percent}%)`;
 
@@ -176,7 +186,7 @@ async function optimizeOutlineLogicAjax() {
 
             // 检查是否完成
             if (result.completed) {
-                const summary = totalSkipped > 0 
+                const summary = totalSkipped > 0
                     ? `大纲逻辑优化完成！共修改 ${totalUpdated} 章，跳过 ${totalSkipped} 个批次（可稍后重新优化）`
                     : `所有章节优化完成！共修改 ${totalUpdated} 章`;
                 progressLabel.textContent = summary;
@@ -190,10 +200,22 @@ async function optimizeOutlineLogicAjax() {
             batchIndex = result.next_batch;
             hasMore = result.has_more;
 
+            // v1.12: 额外安全检查 - 如果当前批次已超过总章节数，强制结束
+            if (totalChapters > 0 && batchIndex * 10 >= totalChapters) {
+                hasMore = false;
+            }
+
             // 短暂延迟，避免请求过快
             if (hasMore) {
                 await new Promise(resolve => setTimeout(resolve, 500));
             }
+        }
+
+        // v1.12: 循环异常退出处理
+        if (batchCount >= MAX_BATCHES) {
+            console.error('优化循环超过安全上限');
+            progressLabel.textContent = '优化超时，请刷新页面后重试';
+            showToast('优化超时，请重试', 'error');
         }
 
     } catch (err) {

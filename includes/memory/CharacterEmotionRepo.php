@@ -559,15 +559,17 @@ class CharacterEmotionRepo
     public function cleanup(int $keepChapters = 50): int
     {
         try {
+            $maxCh = DB::fetch(
+                'SELECT COALESCE(MAX(chapter_number), 0) as max_ch FROM character_emotion_history WHERE novel_id = ?',
+                [$this->novelId]
+            );
+            $cutoff = (int)($maxCh['max_ch'] ?? 0) - $keepChapters;
+            if ($cutoff <= 0) return 0;
+
             return DB::delete(
-                "DELETE FROM character_emotion_history
-                 WHERE novel_id = ?
-                   AND chapter_number < (
-                       SELECT COALESCE(MAX(chapter_number), 0) - ?
-                       FROM character_emotion_history
-                       WHERE novel_id = ?
-                   )",
-                [$this->novelId, $keepChapters, $this->novelId]
+                'character_emotion_history',
+                'novel_id = ? AND chapter_number < ?',
+                [$this->novelId, $cutoff]
             );
         } catch (\Throwable $e) {
             return 0;

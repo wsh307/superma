@@ -7,7 +7,7 @@ if (version_compare(PHP_VERSION, '8.0.0', '<')) {
 }
 
 // ============================================================
-// 数据库配置U2FsdGVkX1/JF1AwCx1RG7WVHCeT1XOOxqDjoFoPhAZOHGJycN8SMHlC/ZxOaYdB
+// 数据库配置U2FsdGVkX19YFiriD38FrjiWR4tiAwlsLvY1RBc/rqbyF23S2bBYDuywYgjFtTli
 // ============================================================
 define('DB_HOST',    'localhost');
 define('DB_NAME',    'ai_novel');

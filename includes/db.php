@@ -108,7 +108,9 @@ class DB {
             ]);
 
             // MySQL 5.7+ 版本检测（5.7 对 JSON/utf8mb4 支持完整，5.6 及以下有缺陷）
-            $version = self::$pdo->query('SELECT VERSION()')->fetchColumn();
+            $versionStmt = self::$pdo->query('SELECT VERSION()');
+            $version = $versionStmt ? $versionStmt->fetchColumn() : '';
+            $versionStmt->closeCursor();
             if ($version && preg_match('/(\d+)\.(\d+)/', $version, $m)) {
                 $major = (int)$m[1];
                 $minor = (int)$m[2];
@@ -139,12 +141,12 @@ class DB {
      * 避免每次 PHP 请求都执行 9 次 information_schema 查询 + 5 次 CREATE TABLE IF NOT EXISTS。
      * 每次有结构变更时，递增 SCHEMA_VERSION 即可触发重新迁移。
      */
-    private const SCHEMA_VERSION = 35;
+    private const SCHEMA_VERSION = 36;
 
     private static function migrate(): void {
         // 优先使用数据库记录迁移状态，避免文件权限问题
         $pdo = self::$pdo;
-        
+
         // 检查 system_settings 表是否存在
         $tableExistsStmt = $pdo->query("SHOW TABLES LIKE 'system_settings'");
         $tableExists = $tableExistsStmt->fetch();
@@ -154,11 +156,12 @@ class DB {
             $stmt = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = ?");
             $stmt->execute(['schema_version_migrated']);
             $migratedVersion = $stmt->fetchColumn();
+            $stmt->closeCursor(); // 必须关闭游标，否则后续查询会报 "unbuffered queries" 错误
             if ($migratedVersion !== false && (int)$migratedVersion >= self::SCHEMA_VERSION) {
                 return; // 已迁移，直接跳过
             }
         }
-        
+
         // 回退到文件锁检查（兼容旧版本）
         $storageDir = defined('BASE_PATH') ? BASE_PATH . '/storage' : dirname(__DIR__) . '/storage';
         $lockFile   = $storageDir . '/schema_v' . self::SCHEMA_VERSION . '.lock';
@@ -309,6 +312,13 @@ class DB {
              "ALTER TABLE `chapters` ADD COLUMN `cognitive_load` JSON DEFAULT NULL COMMENT '认知负荷分析：新元素数量、累计趋势' AFTER `rewrite_time`"],
             // [v35] v1.11.5 重写日志子表（foreshadowing_mention_log + catchphrase_callback_log）
             // 此处仅升级 SCHEMA_VERSION 触发 Schema::applyAll() 自动建表，无字段 ALTER 需求
+            // [v36] novel_state 表新增场景位置追踪字段（解决"主角在村里突然看到市区街边"的场景跳跃问题）
+            ['novel_state', 'current_location',
+             "ALTER TABLE `novel_state` ADD COLUMN `current_location` VARCHAR(200) DEFAULT NULL COMMENT '主角当前位置/场景' AFTER `story_momentum`"],
+            ['novel_state', 'location_chapter',
+             "ALTER TABLE `novel_state` ADD COLUMN `location_chapter` INT UNSIGNED DEFAULT NULL COMMENT '位置所在章节号' AFTER `current_location`"],
+            ['novel_state', 'location_transition',
+             "ALTER TABLE `novel_state` ADD COLUMN `location_transition` VARCHAR(300) DEFAULT NULL COMMENT '到达当前位置的方式描写' AFTER `location_chapter`"],
         ];
 
         foreach ($columns as [$table, $col, $sql]) {
@@ -1001,7 +1011,8 @@ class DB {
         } finally {
             // 释放数据库迁移锁
             try {
-                $pdo->exec("SELECT RELEASE_LOCK('db_migrate_v" . self::SCHEMA_VERSION . "')");
+                $relStmt = $pdo->query("SELECT RELEASE_LOCK('db_migrate_v" . self::SCHEMA_VERSION . "')");
+                if ($relStmt) { $relStmt->fetchColumn(); $relStmt->closeCursor(); }
             } catch (\Throwable $e) {
                 // 锁自动随连接释放
             }

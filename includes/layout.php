@@ -2,7 +2,7 @@
 defined('APP_LOADED') or die('Direct access denied.');
 
 /**
- * 静态资源路径解析函数（已弃用） U2FsdGVkX1/JF1AwCx1RG7WVHCeT1XOOxqDjoFoPhAZOHGJycN8SMHlC/ZxOaYdB
+ * 静态资源路径解析函数（已弃用） U2FsdGVkX19YFiriD38FrjiWR4tiAwlsLvY1RBc/rqbyF23S2bBYDuywYgjFtTli
  * 当前版本强制使用CDN加载Bootstrap资源，确保最新版本和最佳性能。
  * 如需恢复本地资源支持，可取消注释以下函数并修改pageHeader/pageFooter中的引用。
  */
@@ -112,7 +112,7 @@ function pageHeader(string $title = '', string $activeNav = ''): void {
       <i class="bi bi-sliders"></i> 写作参数 </a>
   </nav>
   <div class="sidebar-footer">
-    <small>Super Ma Agents v1.5</small>
+    <small>Super Ma Pro Agents v1.5 付费订阅版</small>
   </div>
 </div>
 

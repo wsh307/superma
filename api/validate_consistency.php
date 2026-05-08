@@ -28,11 +28,33 @@ if (!defined('CLI_MODE')) {
 
     // ---- 解析参数 ----
     $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
-    $chapterId = (int)($input['chapter_id'] ?? 0);
-    $novelId   = (int)($input['novel_id'] ?? 0);
+    $chapterId   = (int)($input['chapter_id'] ?? 0);
+    $chapterNum  = (int)($input['chapter_number'] ?? 0);
+    $novelId     = (int)($input['novel_id'] ?? 0);
 
-    if (!$chapterId || !$novelId) {
-        echo json_encode(['error' => '缺少 chapter_id 或 novel_id']);
+    if (!$novelId) {
+        echo json_encode(['ok' => false, 'error' => '缺少 novel_id', 'msg' => '缺少 novel_id'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if (!$chapterId && $chapterNum > 0) {
+        $resolved = DB::fetch(
+            'SELECT id FROM chapters WHERE novel_id=? AND chapter_number=? LIMIT 1',
+            [$novelId, $chapterNum]
+        );
+        $chapterId = $resolved ? (int)$resolved['id'] : 0;
+    }
+
+    if (!$chapterId) {
+        $latest = DB::fetch(
+            'SELECT id FROM chapters WHERE novel_id=? AND status="completed" ORDER BY chapter_number DESC LIMIT 1',
+            [$novelId]
+        );
+        $chapterId = $latest ? (int)$latest['id'] : 0;
+    }
+
+    if (!$chapterId) {
+        echo json_encode(['ok' => false, 'error' => '未找到可检测的章节', 'msg' => '未找到可检测的章节'], JSON_UNESCAPED_UNICODE);
         exit;
     }
 
@@ -45,13 +67,13 @@ if (!defined('CLI_MODE')) {
     );
 
     if (!$chapter) {
-        echo json_encode(['error' => '章节不存在']);
+        echo json_encode(['ok' => false, 'error' => '章节不存在', 'msg' => '章节不存在'], JSON_UNESCAPED_UNICODE);
         exit;
     }
 
     $content = $chapter['content'] ?? '';
     if (empty(trim($content))) {
-        echo json_encode(['error' => '章节内容为空，无法检测', 'gates' => [], 'total_score' => 0]);
+        echo json_encode(['ok' => false, 'error' => '章节内容为空，无法检测', 'msg' => '章节内容为空，无法检测'], JSON_UNESCAPED_UNICODE);
         exit;
     }
 
@@ -77,15 +99,16 @@ if (!defined('CLI_MODE')) {
     // v11: 质量检查开关 — 如果用户在设置中关闭了质量检查，直接返回通过
     $qualityEnabled = (bool)getSystemSetting('ws_quality_check_enabled', true, 'bool');
     if (!$qualityEnabled) {
-        $response = [
+        echo json_encode([
+            'ok'            => true,
             'passes'        => true,
             'total_score'   => 100,
             'gates'         => [],
             'summary'       => '质量检查已关闭',
             'quality_score' => 100,
             'gate_results'  => [],
-        ];
-        echo json_encode($response, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+            'data'          => ['issues' => [], 'warnings' => []],
+        ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
         exit;
     }
 
@@ -96,14 +119,33 @@ if (!defined('CLI_MODE')) {
         ? round(array_sum($scores) / count($scores), 1)
         : 0;
 
+    $allIssues   = [];
+    $allWarnings = [];
+    foreach ($results as $gate) {
+        $chNum = $chapter['chapter_number'] ?? 0;
+        $gateName = $gate['name'] ?? '';
+        foreach ($gate['issues'] ?? [] as $issue) {
+            $item = ['chapter' => $chNum, 'type' => $gateName, 'message' => $issue];
+            if (($gate['score'] ?? 100) < 70) {
+                $allIssues[] = $item;
+            } else {
+                $allWarnings[] = $item;
+            }
+        }
+    }
+
     $response = [
-        'passes'      => $allPass,
-        'total_score' => $avgScore,
-        'gates'       => $results,
-        'summary'     => generateSummary($results),
-        // 回写字段（供 write_chapter.php 使用）
+        'ok'            => true,
+        'passes'        => $allPass,
+        'total_score'   => $avgScore,
+        'gates'         => $results,
+        'summary'       => generateSummary($results),
         'quality_score' => $avgScore,
-        'gate_results' => $results,
+        'gate_results'  => $results,
+        'data'          => [
+            'issues'   => $allIssues,
+            'warnings' => $allWarnings,
+        ],
     ];
 
     echo json_encode($response, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
@@ -120,8 +162,8 @@ function checkGate1_Structure(array $ch, string $content): array
     $issues = [];
     $score  = 100;
 
-    // v11: 从系统设置读取质量最低分阈值（百分制，如60表示60分）
-    $minScoreThreshold = (float)getSystemSetting('ws_quality_min_score', 60.0, 'float');
+    // v11: 从系统设置读取质量最低分阈值（1-10分制，×10转为百分制，如6.0表示60分）
+    $minScoreThreshold = (float)getSystemSetting('ws_quality_min_score', 6.0, 'float') * 10;
 
     // 1.1 字数检查：容差优先读 ws_chapter_word_tolerance，兜底用 3% 动态容差（最小80字）
     $len             = mb_strlen($content);

@@ -334,16 +334,17 @@ class WriteEngine
 
                 $modelErrors[$modelId] = 0;
 
-                if ($ai->lastFinishReason === 'length') {
-                    $actualWords = countWords($fullContent);
-                    $lenTol = calculateDynamicTolerance($targetWords);
-                    $lenMax = $lenTol['max'];
-                    if ($actualWords > $lenMax) {
-                        $fullContent = truncateToWordLimit($fullContent, $lenMax);
-                        $onMsg(['warning' => "⚠️ max_tokens截断后超字（{$actualWords}字），已修剪至 " . countWords($fullContent) . " 字"]);
-                    } else {
-                        $onMsg(['info' => "📋 触发max_tokens上限（{$actualWords}字），内容在允许范围内"]);
-                    }
+                // v1.5.4: 所有完成状态都检查字数超限（不仅限 finish_reason=length）
+                // AI 模型常忽略字数指令正常完成(finish_reason=stop)，导致 1000→2000 的偏差
+                $actualWords = countWords($fullContent);
+                $lenTol = calculateDynamicTolerance($targetWords);
+                $lenMax = $lenTol['max'];
+                if ($actualWords > $lenMax) {
+                    $fullContent = truncateToWordLimit($fullContent, $lenMax);
+                    $reason = $ai->lastFinishReason === 'length' ? 'max_tokens截断后' : 'AI正常完成但';
+                    $onMsg(['warning' => "⚠️ {$reason}超字（{$actualWords}字），已修剪至 " . countWords($fullContent) . " 字"]);
+                } elseif ($ai->lastFinishReason === 'length') {
+                    $onMsg(['info' => "📋 触发max_tokens上限（{$actualWords}字），内容在允许范围内"]);
                 }
                 break 2;
             }
@@ -662,6 +663,34 @@ class WriteEngine
             addLog($novelId, 'warn', '伏笔提及追踪跳过：' . $e->getMessage());
         }
 
+        // --- 角色出场追踪 (v1.11.8) ---
+        try {
+            require_once __DIR__ . '/memory/CharacterCardRepo.php';
+            $cardRepo = new CharacterCardRepo($novelId);
+            $chNum = (int)($chapter['chapter_number'] ?? 0);
+
+            // 获取所有已知角色名
+            $allCards = $cardRepo->listAll(false);
+            if (!empty($allCards)) {
+                $presentNames = [];
+                foreach ($allCards as $card) {
+                    $name = $card['name'];
+                    // 角色名出现在正文中即视为出场
+                    if (mb_strpos($fullContent, $name) !== false) {
+                        $presentNames[] = $name;
+                    }
+                }
+                if (!empty($presentNames)) {
+                    $touched = $cardRepo->touchPresenceBatch($presentNames, $chNum);
+                    if ($touched > 0) {
+                        addLog($novelId, 'info', "角色出场追踪：本章{$touched}个角色出场");
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            addLog($novelId, 'warn', '角色出场追踪跳过：' . $e->getMessage());
+        }
+
         // --- 金句回调追踪 (v1.10.3) ---
         try {
             require_once __DIR__ . '/memory/CatchphraseRepo.php';
@@ -735,11 +764,9 @@ class WriteEngine
                 $qScore = (float)(DB::fetch("SELECT quality_score FROM chapters WHERE id=?", [$chId])['quality_score'] ?? 100);
 
                 $rewriter = new RewriteAgent($novelId);
-                $threshold = (int)getSystemSetting('ws_rewrite_threshold', 70, 'int');
-                $minGain   = (int)getSystemSetting('ws_rewrite_min_gain', 10, 'int');
                 $rewriteResult = $rewriter->rewriteIfNeeded(
                     $chapter, $fullContent, $gates, $qScore,
-                    $novelData['model_id'] ?? null, $threshold, $minGain
+                    $novelData['model_id'] ?? null
                 );
                 if ($rewriteResult['rewritten']) {
                     $fullContent = $rewriteResult['content'];
@@ -1380,6 +1407,7 @@ class WriteEngine
             'resolved_foreshadowing' => [],
             'story_momentum'         => $momentum,
             'cool_point_type'        => '',
+            'character_emotions'     => [],
         ];
     }
 }
