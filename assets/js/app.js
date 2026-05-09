@@ -186,13 +186,8 @@ document.addEventListener('DOMContentLoaded', () => {
         btnNext.addEventListener('click', () => writeNextChapter());
     }
 
-    // ---- 单章写作按钮 ----
-    document.querySelectorAll('.btn-write-single').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const chapterId = parseInt(btn.dataset.chapter);
-            writeSingleChapter(NOVEL_ID, chapterId);
-        });
-    });
+    // ---- 章节列表事件委托（替代逐个绑定，支持 DOM 刷新后自动生效） ----
+    bindChapterListDelegation();
 
     // ---- 取消写作按钮 ----
     const btnCancel = document.getElementById('btn-cancel-write');
@@ -1331,6 +1326,7 @@ async function startAutoWrite() {
         }
 
         if (autoWriteStop || myGen !== autoWriteGen) break;
+        refreshChapterList();
         const sleepMs = typeof AUTO_WRITE_INTERVAL !== 'undefined' ? AUTO_WRITE_INTERVAL : 1500;
         await new Promise(r => setTimeout(r, sleepMs));
     }
@@ -1402,6 +1398,7 @@ async function startAutoWrite() {
 
             // 补写完当前章后，如果用户要求停止，则退出
             if (autoWriteStop || myGen !== autoWriteGen) break;
+            refreshChapterList();
             const sleepMs = typeof AUTO_WRITE_INTERVAL !== 'undefined' ? AUTO_WRITE_INTERVAL : 1500;
             await new Promise(r => setTimeout(r, sleepMs));
         }
@@ -1452,7 +1449,68 @@ window.stopAutoWrite = function() {
     if (spinner) spinner.style.display = 'none';
 };
 
-// 局部刷新章节列表（不整页 reload）
+function bindChapterListDelegation() {
+    const container = document.getElementById('tab-chapters');
+    if (!container || container._delegated) return;
+    container._delegated = true;
+
+    container.addEventListener('click', (e) => {
+        const btn = e.target.closest('button, a');
+        if (!btn) return;
+
+        if (btn.classList.contains('btn-write-single')) {
+            e.preventDefault();
+            writeSingleChapter(NOVEL_ID, parseInt(btn.dataset.chapter));
+        } else if (btn.classList.contains('btn-regenerate-synopsis')) {
+            e.preventDefault();
+            e.stopPropagation();
+            const chapterId  = parseInt(btn.dataset.chapterId);
+            const chapterNum = parseInt(btn.dataset.chapterNum);
+            const hasTitle   = btn.dataset.hasTitle === '1';
+            if (!hasTitle) {
+                generateChapterTitle(btn, chapterId, chapterNum);
+            } else {
+                regenerateChapterSynopsis(chapterId, chapterNum);
+            }
+        } else if (btn.classList.contains('btn-chapter-detail')) {
+            e.preventDefault();
+            openChapterDetail(btn.dataset.chapterId, btn.dataset.chapterNum);
+        }
+    });
+}
+
+function openChapterDetail(chapterId, chapterNum) {
+    if (!chapterId) return;
+    document.getElementById('detail-chapter-id').value = chapterId;
+    document.getElementById('detail-chapter-num').textContent = chapterNum;
+    fetch('api/actions.php', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || ''},
+        body: JSON.stringify({ action: 'get_chapter_detail', chapter_id: parseInt(chapterId) })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok && data.data && data.data.chapter) {
+            var ch = data.data.chapter;
+            document.getElementById('detail-title').value = ch.title || '';
+            document.getElementById('detail-outline').value = ch.outline || '';
+            document.getElementById('detail-content').textContent = ch.content || '暂无内容';
+            document.getElementById('detail-words').textContent = (ch.words || 0) + ' 字';
+            document.getElementById('detail-synopsis').textContent = ch.chapter_summary || '暂无概要';
+        } else {
+            document.getElementById('detail-content').textContent = '加载失败：' + (data.msg || '未知错误');
+        }
+    })
+    .catch(err => {
+        document.getElementById('detail-content').textContent = '网络错误：' + err.message;
+    });
+
+    var modal = new bootstrap.Modal(document.getElementById('chapterDetailModal'));
+    modal.show();
+
+    if (typeof loadHumanCritic === 'function') loadHumanCritic(chapterId);
+}
+
 async function refreshChapterList() {
     try {
         const res = await fetch(location.href);
@@ -1463,12 +1521,6 @@ async function refreshChapterList() {
         const curList = document.getElementById('tab-chapters');
         if (newList && curList) {
             curList.innerHTML = newList.innerHTML;
-            // 重新绑定单章写作按钮
-            curList.querySelectorAll('.btn-write-single').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    writeSingleChapter(NOVEL_ID, parseInt(btn.dataset.chapter));
-                });
-            });
         }
     } catch(e) { /* 静默失败，不影响主流程 */ }
 }
@@ -2441,6 +2493,15 @@ async function supplementOutline() {
     if (!btnSupp) return;
     const novelId = parseInt(btnSupp.dataset.novel);
 
+    const outlined = parseInt(btnSupp.dataset.outlined) || 0;
+    const target   = parseInt(btnSupp.dataset.target)   || 0;
+    if (target > 0 && outlined >= target) {
+        showToast('所有章节大纲已完整，无需补写', 'info');
+        btnSupp.disabled = true;
+        btnSupp.title = '所有章节大纲已完整，无需补写';
+        return;
+    }
+
     // ---- UI 元素（复用大纲生成面板） ----
     const wrap      = document.getElementById('outline-progress-wrap');
     const label     = document.getElementById('outline-progress-label');
@@ -2827,6 +2888,85 @@ async function generateStoryOutline() {
 // ============================================================
 // [v2新增] 生成章节概要
 // ============================================================
+
+async function generateChapterTitle(btn, chapterId, chapterNum) {
+    if (!confirm(`确定要为第${chapterNum}章生成标题吗？`)) return;
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+    try {
+        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        const res = await fetch('api/actions.php', {
+            method:  'POST',
+            headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken},
+            body:    JSON.stringify({ action: 'generate_chapter_title', chapter_id: chapterId }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+            const titleEl = btn.closest('.chapter-list-row')?.querySelector('.ch-title');
+            if (titleEl) titleEl.textContent = data.data.title;
+            btn.dataset.hasTitle = '1';
+            btn.title = '重新生成细纲';
+            showToast(`标题已生成：${data.data.title}`, 'success');
+        } else {
+            showToast(data.msg || '生成失败', 'error');
+        }
+    } catch (err) {
+        showToast('生成失败：' + err.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-arrow-clockwise"></i>';
+    }
+}
+
+async function regenerateChapterSynopsis(chapterId, chapterNum) {
+    if (!confirm(`确定要重新生成第${chapterNum}章的细纲吗？\n\n已有细纲将被覆盖。`)) return;
+
+    const btn = document.querySelector(`.btn-regenerate-synopsis[data-chapter-id="${chapterId}"]`);
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
+
+    try {
+        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        const response = await fetch('api/generate_chapter_synopsis.php', {
+            method:  'POST',
+            headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken},
+            body:    JSON.stringify({ novel_id: parseInt(btn?.dataset.novel || 0), chapter_ids: [chapterId], force: true }),
+        });
+
+        if (!response.ok) { showToast('服务器错误: ' + response.status, 'error'); return; }
+
+        const reader  = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '', currentEvent = '', done = false;
+
+        while (true) {
+            const { value, done: streamDone } = await reader.read();
+            if (streamDone) break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split('\n');
+            buf = lines.pop();
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith(':')) { currentEvent = ''; continue; }
+                if (trimmed.startsWith('event: ')) { currentEvent = trimmed.slice(7).trim(); continue; }
+                if (!trimmed.startsWith('data: ')) continue;
+                let d;
+                try { d = JSON.parse(trimmed.slice(6)); } catch { currentEvent = ''; continue; }
+                if (currentEvent === 'complete') { done = true; break; }
+                if (currentEvent === 'error') { showToast(d.msg || '生成失败', 'error'); return; }
+            }
+            if (done) break;
+        }
+
+        showToast(`第${chapterNum}章细纲已重新生成`, 'success');
+        location.reload();
+    } catch (err) {
+        showToast('生成出错：' + err.message, 'error');
+    } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-clockwise"></i>'; }
+    }
+}
 
 async function generateChapterSynopsis() {
     const btn = document.getElementById('btn-synopsis');

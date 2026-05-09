@@ -84,14 +84,43 @@ try {
         }
     );
     
-    // 解析AI返回的JSON
     $result = parseSynopsisResponse($rawResponse);
-    
+
     if (!$result) {
         echo json_encode(['success' => false, 'error' => 'AI返回格式错误，请重试']);
         exit;
     }
-    
+
+    $updateData = [];
+    if (!empty($result['synopsis'])) {
+        $updateData['synopsis'] = $result['synopsis'];
+    }
+    if (!empty($result['pacing'])) {
+        $updateData['pacing'] = $result['pacing'];
+    }
+    if (!empty($result['cliffhanger'])) {
+        $updateData['cliffhanger'] = $result['cliffhanger'];
+    }
+    if (!empty($result['scene_breakdown'])) {
+        $updateData['scene_breakdown'] = json_encode($result['scene_breakdown'], JSON_UNESCAPED_UNICODE);
+    }
+    if (!empty($result['dialogue_beats'])) {
+        $updateData['dialogue_beats'] = json_encode($result['dialogue_beats'], JSON_UNESCAPED_UNICODE);
+    }
+    if (!empty($result['sensory_details'])) {
+        $updateData['sensory_details'] = json_encode($result['sensory_details'], JSON_UNESCAPED_UNICODE);
+    }
+    if (!empty($result['foreshadowing'])) {
+        $updateData['foreshadowing'] = json_encode($result['foreshadowing'], JSON_UNESCAPED_UNICODE);
+    }
+    if (!empty($result['callbacks'])) {
+        $updateData['callbacks'] = json_encode($result['callbacks'], JSON_UNESCAPED_UNICODE);
+    }
+
+    if (!empty($updateData)) {
+        DB::update('chapter_synopses', $updateData, 'novel_id=? AND chapter_number=?', [$novelId, $chapterNumber]);
+    }
+
     echo json_encode([
         'success' => true,
         'data' => $result,
@@ -175,19 +204,23 @@ function buildOptimizeSynopsisPrompt(array $novel, array $chapter, array $curren
  * 解析AI返回的章节概要JSON
  */
 function parseSynopsisResponse(string $rawResponse): ?array {
-    // 尝试提取JSON
     if (preg_match('/\{[\s\S]*\}/m', $rawResponse, $matches)) {
         $json = $matches[0];
         $data = json_decode($json, true);
-        
+
         if (json_last_error() === JSON_ERROR_NONE && isset($data['synopsis'])) {
             return [
-                'synopsis' => $data['synopsis'],
-                'pacing' => $data['pacing'] ?? '',
-                'cliffhanger' => $data['cliffhanger'] ?? ''
+                'synopsis'        => $data['synopsis'],
+                'pacing'          => $data['pacing'] ?? '',
+                'cliffhanger'     => $data['cliffhanger'] ?? '',
+                'scene_breakdown' => $data['scene_breakdown'] ?? [],
+                'dialogue_beats'  => $data['dialogue_beats'] ?? [],
+                'sensory_details' => $data['sensory_details'] ?? [],
+                'foreshadowing'   => $data['foreshadowing'] ?? [],
+                'callbacks'       => $data['callbacks'] ?? [],
             ];
         }
     }
-    
+
     return null;
 }

@@ -75,6 +75,7 @@ class IterativeRefinementController
     public function refine(string $initialContent, array $chapterInfo, array $context = []): array
     {
         $startTime = microtime(true);
+        $timeBudget = 300;
         $currentContent = $initialContent;
         $currentScore = 0;
         $bestContent = $currentContent;
@@ -87,6 +88,14 @@ class IterativeRefinementController
 
         for ($iteration = 1; $iteration <= $this->maxIterations; $iteration++) {
             $iterationStartTime = microtime(true);
+
+            if (microtime(true) - $startTime > $timeBudget) {
+                addLog($this->novelId, 'iterative_refine', sprintf(
+                    '迭代超时（%.0fs > %ds），提前终止',
+                    microtime(true) - $startTime, $timeBudget
+                ));
+                break;
+            }
 
             addLog($this->novelId, 'iterative_refine', sprintf(
                 '第 %d/%d 轮迭代开始，当前进度：%.1f → 目标：%.1f',
@@ -592,11 +601,16 @@ EOT;
 
         try {
             $modelId = $context['model_id'] ?? null;
-            $ai = getAIClient($modelId);
-            $rewritten = trim($ai->chat([
-                ['role' => 'system', 'content' => $system],
-                ['role' => 'user',   'content' => $user],
-            ], 'creative'));
+            require_once dirname(__DIR__) . '/ai.php';
+            $rewritten = trim(withModelFallback(
+                $modelId,
+                function (AIClient $ai) use ($system, $user) {
+                    return $ai->chat([
+                        ['role' => 'system', 'content' => $system],
+                        ['role' => 'user',   'content' => $user],
+                    ], 'creative');
+                }
+            ));
 
             if (empty($rewritten) || mb_strlen($rewritten) < 200) {
                 addLog($this->novelId, 'iterative_refine', '警告：AI 返回内容过短，使用原始内容');

@@ -25,20 +25,10 @@ function sendHeartbeatOptimize(): void {
         if (ob_get_level()) ob_flush();
         flush();
         $lastHeartbeat = $now;
-        
-        // 记录日志（调试用）
-        error_log("[Heartbeat] Sent at " . date('H:i:s'));
     }
 }
 
-// 注册全局心跳函数
 $GLOBALS['sendHeartbeat'] = 'sendHeartbeatOptimize';
-
-// 使用 declare(ticks=1) 来定期检查心跳
-declare(ticks=1) {
-    // 注册 tick 函数，每执行一定数量的语句就检查心跳
-    register_tick_function('sendHeartbeatOptimize');
-}
 
 define('APP_LOADED', true);
 require_once dirname(__DIR__) . '/config.php';
@@ -277,6 +267,29 @@ for ($i = $startBatchIndex; $i < $totalChapters; $i += $batchSize) {
     // 解析并入库
     $optimized = extractOutlineObjects($rawResponse);
     if (empty($optimized)) {
+        sse('progress', ['msg' => "第{$batchFrom}～{$batchTo}章：AI返回解析失败，重试一次..."]);
+        $rawResponse = '';
+        try {
+            withModelFallback(
+                $novel['model_id'] ?: null,
+                function (AIClient $ai) use ($messages, &$rawResponse) {
+                    $rawResponse = '';
+                    $ai->chatStream($messages, function (string $token) use (&$rawResponse) {
+                        sendHeartbeatOptimize();
+                        if ($token === '[DONE]') return;
+                        $rawResponse .= $token;
+                    }, 'structured');
+                },
+                function (AIClient $nextAi, string $errMsg) {
+                    sse('model_switch', ['msg' => "切换到「{$nextAi->modelLabel}」重试", 'error' => $errMsg]);
+                }
+            );
+        } catch (RuntimeException $e) {
+            // ignore
+        }
+        $optimized = extractOutlineObjects($rawResponse);
+    }
+    if (empty($optimized)) {
         sse('error', ['msg' => "第{$batchFrom}～{$batchTo}章：AI返回解析失败，跳过"]);
         continue;
     }
@@ -332,14 +345,12 @@ if (!empty($allChapters)) {
     for ($arc = 1; $arc <= ceil($maxChapter / 10); $arc++) {
         $arcFrom = ($arc - 1) * 10 + 1;
         $arcTo   = min($arc * 10, $maxChapter);
+        sendHeartbeatOptimize();
         generateAndSaveArcSummary($novel, $arcFrom, $arcTo);
     }
 }
 
 addLog($novelId, 'optimize_outline', "大纲逻辑优化完成，共修改 {$updatedTotal} 章");
-
-// 取消注册 tick 函数
-unregister_tick_function('sendHeartbeatOptimize');
 
 sse('complete', [
     'msg'     => "大纲逻辑优化完成！共修改 {$updatedTotal} 章，故事线摘要已同步更新。",

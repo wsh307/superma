@@ -354,7 +354,12 @@ function extractChapterSynopsis(string $raw): array {
     $start = strpos($raw, '{');
     if ($start !== false) $raw = substr($raw, $start);
     $decoded = json_decode($raw, true);
-    if (!is_array($decoded)) return [];
+    if (!is_array($decoded)) {
+        if (mb_strlen(trim($raw)) > 50) {
+            return ['synopsis' => trim($raw), 'pacing' => '中'];
+        }
+        return [];
+    }
 
     return [
         'chapter_number'  => (int)($decoded['chapter_number']  ?? 0),

@@ -112,7 +112,7 @@ function pageHeader(string $title = '', string $activeNav = ''): void {
       <i class="bi bi-sliders"></i> 写作参数 </a>
   </nav>
   <div class="sidebar-footer">
-    <small>Super Ma Pro Agents v1.5 付费订阅版</small>
+    <small>Super Ma Agents v1.6</small>
   </div>
 </div>
 

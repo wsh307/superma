@@ -265,7 +265,8 @@ pageHeader('小说管理 - ' . $novel['title'], 'home');
                 data-novel="<?= $id ?>"
                 data-outlined="<?= $outlined ?>"
                 data-target="<?= $novel['target_chapters'] ?>"
-                <?= $outlined === 0 ? 'disabled title="请先生成大纲"' : '' ?>>
+                <?= $outlined === 0 ? 'disabled title="请先生成大纲"' : '' ?>
+                <?= $outlined >= $novel['target_chapters'] ? 'disabled title="所有章节大纲已完整，无需补写"' : '' ?>>
           <i class="bi bi-patch-plus me-1"></i>补写缺失细纲
         </button>
         <!-- 优化大纲逻辑 -->
@@ -294,15 +295,6 @@ pageHeader('小说管理 - ' . $novel['title'], 'home');
                 data-novel="<?= $id ?>"
                 <?= $outlined === 0 ? 'disabled title="请先生成大纲"' : '' ?>>
           <i class="bi bi-skip-forward me-1"></i>写下一章
-        </button>
-        <!-- 挂机写作 -->
-        <button class="btn btn-sm <?= !empty($novel['daemon_write']) ? 'btn-success' : 'btn-outline-success' ?>"
-                id="btn-daemon-write"
-                data-novel="<?= $id ?>"
-                data-enabled="<?= !empty($novel['daemon_write']) ? '1' : '0' ?>"
-                <?= $outlined === 0 ? 'disabled title="请先生成大纲"' : '' ?>
-                onclick="DaemonWrite.toggle()">
-          <i class="bi bi-robot me-1"></i><?= !empty($novel['daemon_write']) ? '挂机中' : '挂机写作' ?>
         </button>
         <!-- 取消写作 -->
         <button class="btn btn-sm btn-outline-warning" id="btn-cancel-write"
@@ -782,6 +774,16 @@ try {
           </button>
           <?php else: ?>
           <span class="ch-status-text">待大纲</span>
+          <?php endif; ?>
+          <?php if ($ch['status'] !== 'pending'): ?>
+          <button class="btn btn-xs btn-outline-warning btn-regenerate-synopsis"
+                  data-novel="<?= $id ?>"
+                  data-chapter-id="<?= $ch['id'] ?>"
+                  data-chapter-num="<?= $ch['chapter_number'] ?>"
+                  data-has-title="<?= $ch['title'] ? '1' : '0' ?>"
+                  title="<?= $ch['title'] ? '重新生成细纲' : '生成章节标题' ?>">
+            <i class="bi bi-arrow-clockwise"></i>
+          </button>
           <?php endif; ?>
         </div>
       </div>
@@ -2605,46 +2607,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 章节列表按钮绑定（查看 / 写作 / 详情Modal操作）
   // ================================================================
 
-  // 「查看」按钮 → 打开章节详情 Modal
-  document.querySelectorAll('.btn-chapter-detail').forEach(btn => {
-    btn.addEventListener('click', function() {
-      var chapterId  = this.dataset.chapterId;
-      var chapterNum = this.dataset.chapterNum;
-      if (!chapterId) return;
-
-      document.getElementById('detail-chapter-id').value = chapterId;
-      document.getElementById('detail-chapter-num').textContent = chapterNum;
-
-      // 加载章节详情
-      fetch('api/actions.php', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json', 'X-CSRF-Token': getCsrf()},
-        body: JSON.stringify({ action: 'get_chapter_detail', chapter_id: parseInt(chapterId) })
-      })
-      .then(r => r.json())
-      .then(data => {
-        if (data.ok && data.data && data.data.chapter) {
-          var ch = data.data.chapter;
-          document.getElementById('detail-title').value = ch.title || '';
-          document.getElementById('detail-outline').value = ch.outline || '';
-          document.getElementById('detail-content').textContent = ch.content || '暂无内容';
-          document.getElementById('detail-words').textContent = (ch.words || 0) + ' 字';
-          document.getElementById('detail-synopsis').textContent = ch.chapter_summary || '暂无概要';
-        } else {
-          document.getElementById('detail-content').textContent = '加载失败：' + (data.msg || '未知错误');
-        }
-      })
-      .catch(err => {
-        document.getElementById('detail-content').textContent = '网络错误：' + err.message;
-      });
-
-      var modal = new bootstrap.Modal(document.getElementById('chapterDetailModal'));
-      modal.show();
-
-      // v1.10.3: 加载人工评分
-      loadHumanCritic(chapterId);
-    });
-  });
+  // 「查看」按钮 → 已由 app.js bindChapterListDelegation() 事件委托统一处理
 
   // v1.10.3: 人工评分滑块实时显示
   document.querySelectorAll('#human-critic-dims input[type="range"]').forEach(el => {
@@ -3768,13 +3731,14 @@ function renderCharacterList(characters) {
     return;
   }
   container.innerHTML = characters.map(c => {
-    const badgeClass = c.importance === 'major' ? 'bg-warning text-dark' :
-                       c.importance === 'supporting' ? 'bg-info text-dark' : 'bg-secondary';
+    const badgeClass = c.importance === 'protagonist' ? 'bg-danger text-white' :
+                       c.importance === 'major' ? 'bg-warning text-dark' :
+                       c.importance === 'minor' ? 'bg-info text-dark' : 'bg-secondary';
     const gapWarn = c.gap > 8 ? 'text-warning' : 'text-muted';
     const warnIcon = c.gap > 8 ? ' ⚠️' : '';
     return `<div class="list-group-item bg-transparent border-secondary d-flex justify-content-between align-items-center py-2">
       <div>
-        <span class="badge ${badgeClass} me-2 small">${c.importance === 'major' ? '主要' : c.importance === 'supporting' ? '次要' : '配角'}</span>
+        <span class="badge ${badgeClass} me-2 small">${c.importance === 'protagonist' ? '主角' : c.importance === 'major' ? '主要' : c.importance === 'minor' ? '次要' : '背景'}</span>
         <span style="color:var(--text)">${escHtml(c.name)}</span>
       </div>
       <span class="small ${gapWarn}">

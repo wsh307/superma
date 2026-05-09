@@ -330,7 +330,7 @@ html, body {
 /* 表头 */
 .chapter-list-header {
   display: grid;
-  grid-template-columns: 72px 1fr 90px 70px 130px;
+  grid-template-columns: 72px 1fr 90px 70px 170px;
   gap: 0 12px;
   padding: 8px 16px;
   background: var(--bg-card2);
@@ -345,7 +345,7 @@ html, body {
 /* 每章行 */
 .chapter-list-row {
   display: grid;
-  grid-template-columns: 72px 1fr 90px 70px 130px;
+  grid-template-columns: 72px 1fr 90px 70px 170px;
   gap: 0 12px;
   align-items: center;
   padding: 10px 16px;
@@ -424,7 +424,7 @@ html, body {
 @media (max-width: 640px) {
   .chapter-list-header,
   .chapter-list-row {
-    grid-template-columns: 60px 1fr 80px 80px;
+    grid-template-columns: 60px 1fr 80px 110px;
   }
   .col-words,
   .chapter-list-header .col-words { display: none; }

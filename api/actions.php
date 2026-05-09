@@ -669,6 +669,90 @@ try {
             break;
 
         // -----------------------------------------------------------
+        case 'generate_chapter_title':
+            $chapterId = (int)($input['chapter_id'] ?? 0);
+            if (!$chapterId) throw new RuntimeException('缺少章节ID');
+            $ch = getChapter($chapterId);
+            if (!$ch) throw new RuntimeException('章节不存在');
+            $novel = getNovel($ch['novel_id']);
+            if (!$novel) throw new RuntimeException('小说不存在');
+
+            $chNum   = (int)($ch['chapter_number'] ?? 0);
+            $outline = trim($ch['outline'] ?? '');
+            $synopsis = '';
+            if (!empty($ch['synopsis_id'])) {
+                $syn = DB::fetch('SELECT synopsis FROM chapter_synopses WHERE id=?', [$ch['synopsis_id']]);
+                $synopsis = trim($syn['synopsis'] ?? '');
+            }
+            if (empty($outline) && empty($synopsis)) {
+                throw new RuntimeException('该章节没有大纲或概要，无法生成标题');
+            }
+
+            $prevChapters = DB::fetchAll(
+                'SELECT chapter_number, title FROM chapters
+                 WHERE novel_id=? AND chapter_number<? AND title IS NOT NULL AND title != ""
+                 ORDER BY chapter_number DESC LIMIT 5',
+                [$ch['novel_id'], $chNum]
+            );
+            $prevChapters = array_reverse($prevChapters);
+
+            $prevTitles = '';
+            if (!empty($prevChapters)) {
+                $prevTitles = "前几章标题：\n";
+                foreach ($prevChapters as $pc) {
+                    $prevTitles .= "第{$pc['chapter_number']}章《{$pc['title']}》\n";
+                }
+            }
+
+            $contextText = $synopsis ?: $outline;
+
+            $system = '你是一位小说起名专家，擅长根据章节内容创作简洁有力的章节标题。';
+            $user = <<<EOT
+为小说《{$novel['title']}》第{$chNum}章生成一个章节标题。
+
+【章节概要/大纲】
+{$contextText}
+
+{$prevTitles}
+要求：
+1. 标题要简洁有力，一般不超过10个字
+2. 与前几章标题风格一致，不要重复
+3. 能概括本章核心内容或制造悬念
+4. 只输出标题文本，不要加书名号，不要有任何其他文字
+EOT;
+
+            $messages = [
+                ['role' => 'system', 'content' => $system],
+                ['role' => 'user',   'content' => $user],
+            ];
+
+            $title = '';
+            $usage = ['prompt_tokens' => 0, 'completion_tokens' => 0];
+
+            try {
+                withModelFallback(
+                    $novel['model_id'] ?: null,
+                    function (AIClient $ai) use ($messages, &$title, &$usage) {
+                        $title = '';
+                        $usage = $ai->chatStream($messages, function (string $token) use (&$title) {
+                            if ($token === '[DONE]') return;
+                            $title .= $token;
+                        });
+                    }
+                );
+            } catch (RuntimeException $e) {
+                throw new RuntimeException('标题生成失败：' . $e->getMessage());
+            }
+
+            $title = trim($title, " \t\n\r\0\x0B\"'《》");
+            if (empty($title)) throw new RuntimeException('标题生成结果为空');
+
+            DB::update('chapters', ['title' => $title], 'id=?', [$chapterId]);
+            addLog($ch['novel_id'], 'title', "第{$chNum}章标题已生成：{$title}");
+            jsonResponse(true, ['title' => $title, 'chapter_id' => $chapterId], '标题已生成');
+            break;
+
+        // -----------------------------------------------------------
         default:
             throw new RuntimeException("未知操作：$action");
     }

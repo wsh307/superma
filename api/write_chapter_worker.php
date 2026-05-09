@@ -51,6 +51,9 @@ require_once dirname(__DIR__) . '/includes/write_engine.php';
 set_time_limit(CFG_TIME_UNLIMITED);  // CLI 模式不限时
 ignore_user_abort(true);
 
+$workerStartTime = time();
+$workerGlobalTimeout = 1800;
+
 // CLI 参数
 $novelId   = (int)($argv[1] ?? 0);
 $chapterId = (int)($argv[2] ?? 0);
@@ -157,13 +160,25 @@ function updateAsyncProgress(array $updates): void {
 
 function sendHeartbeatWrite(): void {
     global $lastHeartbeat, $asyncTaskId, $chunkBuffer, $chunkBufferCount, $lastFlushTime, $_writingChapterId;
+    global $workerStartTime, $workerGlobalTimeout, $novelId, $ch;
     $now = microtime(true);
-    // 检查是否需要刷新缓冲（时间到了或数量够了）
+    if ($workerStartTime > 0 && (time() - $workerStartTime) > $workerGlobalTimeout) {
+        flushChunkBuffer();
+        $elapsed = time() - $workerStartTime;
+        error_log("[write_worker] 全局超时（{$elapsed}s > {$workerGlobalTimeout}s），强制退出");
+        if ($_writingChapterId > 0) {
+            try {
+                DB::update('chapters', ['status' => 'outlined'], 'id=? AND status="writing"', [$_writingChapterId]);
+                DB::update('novels', ['status' => 'paused'], 'id=?', [$novelId]);
+            } catch (\Throwable) {}
+        }
+        updateAsyncProgress(['status' => 'error', 'error' => "写作全局超时（{$elapsed}秒），已自动恢复"]);
+        exit(1);
+    }
     if ($chunkBuffer !== '' && ($now - $lastFlushTime >= CHUNK_FLUSH_INTERVAL || $chunkBufferCount >= CHUNK_FLUSH_COUNT)) {
         flushChunkBuffer();
     }
     if ($now - $lastHeartbeat < 10) return;
-    // 心跳时刷新章节 updated_at，防止 Watchdog 误杀正在写作的章节
     if ($_writingChapterId > 0) {
         try {
             DB::query('UPDATE chapters SET updated_at = NOW() WHERE id = ? AND status = "writing"', [$_writingChapterId]);
@@ -252,9 +267,15 @@ try {
     $ch       = $resolved['ch'];
     $_writingChapterId = (int)$ch['id'];
 
-    // v1.11.5: 始终使用 writing_settings 全局目标字数，
-    // 否则 writing_settings.php 修改字数后对已有小说不生效
-    $novel['chapter_words'] = max(500, (int)getSystemSetting('ws_chapter_words', (int)$novel['chapter_words'], 'int'));
+    // 小说自身的 chapter_words 优先，全局 ws_chapter_words 仅作为兜底默认值
+    $novelWords = (int)($novel['chapter_words'] ?? 0);
+    if ($novelWords >= 500) {
+        // 小说已有有效字数设置，保留
+    } else {
+        // 小说未设置或值异常，使用全局默认值
+        $novelWords = (int)getSystemSetting('ws_chapter_words', 2000, 'int');
+    }
+    $novel['chapter_words'] = max(500, $novelWords);
 } catch (RuntimeException $e) {
     error_log("[write_worker] Phase1 resolveChapter 失败: {$e->getMessage()}");
     updateAsyncProgress(['status' => 'error', 'error' => $e->getMessage()]);

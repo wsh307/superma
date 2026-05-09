@@ -303,9 +303,15 @@ try {
     $ch         = $resolved['ch'];
     $_writingChapterId = (int)$ch['id'];
 
-    // v1.11.5: 始终使用 writing_settings 全局目标字数，
-    // 否则 writing_settings.php 修改字数后对已有小说不生效
-    $novel['chapter_words'] = max(500, (int)getSystemSetting('ws_chapter_words', (int)$novel['chapter_words'], 'int'));
+    // 小说自身的 chapter_words 优先，全局 ws_chapter_words 仅作为兜底默认值
+    $novelWords = (int)($novel['chapter_words'] ?? 0);
+    if ($novelWords >= 500) {
+        // 小说已有有效字数设置，保留
+    } else {
+        // 小说未设置或值异常，使用全局默认值
+        $novelWords = (int)getSystemSetting('ws_chapter_words', 2000, 'int');
+    }
+    $novel['chapter_words'] = max(500, $novelWords);
 } catch (RuntimeException $e) {
     sseMsgWrite(['error' => $e->getMessage()]);
     sseDoneWrite(); exit;

@@ -238,9 +238,9 @@ $existingTitles = array_column($existingTitleRows, 'title', 'chapter_number');
 // 检测模型是否支持 1M 上下文，决定批量大小
 $is1MModel = false;
 try {
-    $novel = DB::fetch('SELECT model_id FROM novels WHERE id=?', [$novelId]);
-    if ($novel) {
-        $aiClient = getAIClient($novel['model_id'] ? (int)$novel['model_id'] : null);
+    $novelModel = DB::fetch('SELECT model_id FROM novels WHERE id=?', [$novelId]);
+    if ($novelModel) {
+        $aiClient = getAIClient($novelModel['model_id'] ? (int)$novelModel['model_id'] : null);
         $is1MModel = $aiClient->is1MContext();
     }
 } catch (Throwable $e) {

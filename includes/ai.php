@@ -19,17 +19,11 @@ class AIClient {
     private bool   $thinkingEnabled;
     private bool   $is1MContext = false;  // 是否支持 1M 上下文
 
-    /**
-     * v1.4: 心跳回调（替代 $GLOBALS['sendHeartbeat']）
-     * 在流式写作期间定期调用，用于 SSE 保活信号和进度文件更新
-     */
     private $heartbeatCallback = null;
 
-    /**
-     * v1.4: 等待回调（替代 $GLOBALS['sendWaiting']）
-     * 静默超时时调用，通知前端等待状态
-     */
     private $waitingCallback = null;
+
+    private $cancelCheckCallback = null;
 
     /**
      * 最近一次收到 AI chunk 的 Unix 时间戳（秒）
@@ -79,9 +73,10 @@ class AIClient {
      * @param callable|null $heartbeat 心跳回调 fn(): void
      * @param callable|null $waiting   等待回调 fn(int $elapsedSeconds): void
      */
-    public function setCallbacks(?callable $heartbeat, ?callable $waiting): void {
+    public function setCallbacks(?callable $heartbeat, ?callable $waiting, ?callable $cancelCheck = null): void {
         $this->heartbeatCallback = $heartbeat;
         $this->waitingCallback   = $waiting;
+        $this->cancelCheckCallback = $cancelCheck;
     }
 
     /**
@@ -286,9 +281,7 @@ class AIClient {
             CURLOPT_NOPROGRESS => false,
             CURLOPT_PROGRESSFUNCTION => function ($ch, $dlTotal, $dlNow, $ulTotal, $ulNow) use (&$lastHeartbeat, $heartbeatInterval, &$lastAiChunk, $silenceThreshold, &$lastWaitingSent, $that) {
                 $now = time();
-                // 每5秒发送一次心跳
                 if ($now - $lastHeartbeat >= $heartbeatInterval) {
-                    // v1.4: 优先使用显式注入的回调，回退到 $GLOBALS 兼容模式
                     if ($that->heartbeatCallback) {
                         ($that->heartbeatCallback)();
                     } elseif (isset($GLOBALS['sendHeartbeat']) && is_callable($GLOBALS['sendHeartbeat'])) {
@@ -296,10 +289,8 @@ class AIClient {
                     }
                     $lastHeartbeat = $now;
                 }
-                // 静默检测：超过阈值无 AI 文字输出时，发送等待状态
                 if ($now - $lastAiChunk >= $silenceThreshold && $now - $lastWaitingSent >= $silenceThreshold) {
                     $elapsed = $now - $lastAiChunk;
-                    // v1.4: 优先使用显式注入的回调，回退到 $GLOBALS 兼容模式
                     if ($that->waitingCallback) {
                         ($that->waitingCallback)($elapsed);
                     } elseif (isset($GLOBALS['sendWaiting']) && is_callable($GLOBALS['sendWaiting'])) {
@@ -307,13 +298,29 @@ class AIClient {
                     }
                     $lastWaitingSent = $now;
                 }
-                return 0; // 返回0继续传输
+                if ($that->cancelCheckCallback && ($that->cancelCheckCallback)()) {
+                    $that->lastFinishReason = 'canceled';
+                    return 1;
+                }
+                if ($now - $lastAiChunk >= $silenceThreshold * 3) {
+                    $that->lastFinishReason = 'silence_timeout';
+                    return 1;
+                }
+                return 0;
             },
         ]);
 
         curl_exec($ch);
         $curlErr = curl_error($ch);
         curl_close($ch);
+
+        if ($this->lastFinishReason === 'canceled') {
+            throw new RuntimeException('用户取消了写作');
+        }
+
+        if ($this->lastFinishReason === 'silence_timeout') {
+            return $usage;
+        }
 
         if ($curlErr) throw new RuntimeException("CURL Error: $curlErr");
 
@@ -659,18 +666,42 @@ function withModelFallback(
     ?callable $onSwitch = null,
     ?string $taskType = null
 ): mixed {
-    $models    = getModelFallbackList($preferredModelId, $taskType);
-    $lastError = null;
+    $models          = getModelFallbackList($preferredModelId, $taskType);
+    $lastError       = null;
+    $max429Retries   = 3;   // 429 重试次数
+    $base429Delay    = 3;   // 首次退避 3 秒，之后 6s, 12s
 
     foreach ($models as $idx => $modelCfg) {
         $ai = new AIClient($modelCfg);
-        try {
-            return $callback($ai);
-        } catch (RuntimeException $e) {
-            $lastError = $e;
+
+        for ($retry429 = 0; $retry429 <= $max429Retries; $retry429++) {
+            if ($retry429 > 0) {
+                $delay = $base429Delay * pow(2, $retry429 - 1); // 3s, 6s, 12s
+                if ($onSwitch !== null) {
+                    $onSwitch($ai, "API 繁忙 (429)，{$delay}秒后重试（{$retry429}/{$max429Retries}）…");
+                }
+                sleep($delay);
+            }
+
+            try {
+                return $callback($ai);
+            } catch (RuntimeException $e) {
+                $msg = $e->getMessage();
+
+                if (strpos($msg, '(429)') !== false && $retry429 < $max429Retries) {
+                    $lastError = $e;
+                    continue;
+                }
+
+                $lastError = $e;
+                break;
+            }
+        }
+
+        if ($lastError && strpos($lastError->getMessage(), '(429)') === false) {
             if ($idx + 1 < count($models) && $onSwitch !== null) {
                 $nextAi = new AIClient($models[$idx + 1]);
-                $onSwitch($nextAi, $e->getMessage());
+                $onSwitch($nextAi, $lastError->getMessage());
             }
         }
     }

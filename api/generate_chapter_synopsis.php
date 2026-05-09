@@ -31,6 +31,7 @@ header('Connection: keep-alive');
 $input      = json_decode(file_get_contents('php://input'), true) ?? [];
 $novelId    = (int)($input['novel_id'] ?? 0);
 $chapterIds = $input['chapter_ids'] ?? null;
+$force      = !empty($input['force']);
 
 $novel = DB::fetch('SELECT * FROM novels WHERE id=?', [$novelId]);
 if (!$novel) { sse('error', ['msg' => '小说不存在']); sseDone(); exit; }
@@ -70,6 +71,16 @@ if (empty($chapters)) {
     exit;
 }
 
+if ($force && $chapterIds !== null) {
+    foreach ($chapters as $ch) {
+        $existing = DB::fetch('SELECT id FROM chapter_synopses WHERE novel_id=? AND chapter_number=?', [$novelId, $ch['chapter_number']]);
+        if ($existing) {
+            DB::delete('chapter_synopses', 'id=?', [$existing['id']]);
+            DB::update('chapters', ['synopsis_id' => null], 'id=?', [$ch['id']]);
+        }
+    }
+}
+
 $totalChapters = count($chapters);
 $current = 0;
 $totalPrompt = 0;
@@ -88,13 +99,28 @@ foreach ($chapters as $ch) {
     $messages = buildChapterSynopsisPrompt($novel, $ch, $storyOutline);
     $rawResponse = '';
     $usage = ['prompt_tokens' => 0, 'completion_tokens' => 0];
-    
+    $lastSynopsisHeartbeat = time();
+
+    $GLOBALS['sendHeartbeat'] = function() use (&$lastSynopsisHeartbeat) {
+        $now = time();
+        if ($now - $lastSynopsisHeartbeat >= 5) {
+            echo ": heartbeat\n\n";
+            if (ob_get_level()) ob_flush();
+            flush();
+            $lastSynopsisHeartbeat = $now;
+        }
+    };
+
     try {
         withModelFallback(
             $novel['model_id'] ?: null,
-            function (AIClient $ai) use ($messages, &$rawResponse, &$usage) {
+            function (AIClient $ai) use ($messages, &$rawResponse, &$usage, &$lastSynopsisHeartbeat) {
                 $rawResponse = '';
-                $usage = $ai->chatStream($messages, function (string $token) use (&$rawResponse) {
+                $ai->setCallbacks(
+                    $GLOBALS['sendHeartbeat'],
+                    null
+                );
+                $usage = $ai->chatStream($messages, function (string $token) use (&$rawResponse, &$lastSynopsisHeartbeat) {
                     if ($token === '[DONE]') return;
                     $rawResponse .= $token;
                     echo "event: chunk\n";

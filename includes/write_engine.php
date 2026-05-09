@@ -282,6 +282,13 @@ class WriteEngine
                 $fullContent = '';
                 $ai = new AIClient($modelCfg);
                 $usedModel = $ai;
+                $ai->setCallbacks(
+                    $onHeartbeat,
+                    null,
+                    function() use ($novelId) {
+                        return file_exists(BASE_PATH . "/storage/write_cancel_{$novelId}.flag");
+                    }
+                );
 
                 $desired = max($ai->getMaxTokens(), $estTokens);
                 if ($desired > $ai->getMaxTokens()) {
@@ -323,6 +330,18 @@ class WriteEngine
 
                 // v1.4: 采集 token 用量和实际耗时，为 OptimizationAgent 提供真实数据基础
                 $durationMs = (time() - $streamStart) * 1000;
+
+                if ($ai->lastFinishReason === 'silence_timeout') {
+                    if (mb_strlen(trim($fullContent)) >= 200) {
+                        $onMsg(['warning' => '⚠️ AI 静默超时，使用已生成的部分内容（' . countWords($fullContent) . '字）']);
+                        break 2;
+                    }
+                    $fullContent = '';
+                    $sameModelRetries++;
+                    $onMsg(['waiting' => true, 'reason' => "静默超时（" . (CFG_SSE_SILENCE * 3) . "秒无输出），重试{$sameModelRetries}/" . RT_SAME_MODEL_MAX]);
+                    if ($sameModelRetries < RT_SAME_MODEL_MAX) continue;
+                    continue 2;
+                }
 
                 $sinceLast = time() - ($ai->lastChunkTime ?: $streamStart);
                 if ($sinceLast >= $timeoutSec) {
